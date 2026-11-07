@@ -3,119 +3,100 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guide chat · CounterGuide</title>
+<title>Guide · CounterGuide</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
-<header class="topbar"><div class="topbar-inner">
-  <div class="brand"><span class="brand-mark">C</span>CounterGuide <small>AnyCompany</small></div>
-  <nav class="tabs" aria-label="Sections">
-    <a href="index.html" aria-current="page">Guide chat</a>
-    <a href="products.html">Products</a>
-    <a href="platform.html">Platform · Shiftlead</a>
-  </nav>
-  <div class="context">Store associate view</div>
-</div></header>
+<body data-view="guide">
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">C</span><span>CounterGuide</span></a>
+    <nav class="views" aria-label="Views">
+      <a href="index.html" aria-current="page">Guide</a>
+      <a href="platform.html">Shiftlead</a>
+    </nav>
+  </div>
+</header>
 
 <main class="page">
-  <div class="page-head">
-    <div>
-      <h1>Guide chat</h1>
-      <p>Answers come only from AnyCompany product guides and the live catalog. Every answer lists the guides it used.</p>
+  <p class="role">Store associate</p>
+  <h1>Guide</h1>
+  <p class="lede">Pick a product, ask the customer’s question, and read the answer with the documents it used.</p>
+
+  <form class="ask" id="guide-form">
+    <div class="ask-grid">
+      <div class="field">
+        <label for="category">Category</label>
+        <select id="category">
+          <option value="electronics">Electronics</option>
+          <option value="cell phones">Cell phones</option>
+          <option value="hobby equipment" selected>Hobby equipment</option>
+          <option value="batteries">Batteries</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="product">Product</label>
+        <select id="product">
+          <option value="">Loading catalog…</option>
+        </select>
+      </div>
     </div>
+    <p class="picked" id="picked"></p>
+    <div class="field">
+      <label for="q">Question</label>
+      <textarea id="q" maxlength="900" placeholder="Which pack is safe for this truck, and what is the return window?"></textarea>
+    </div>
+    <div class="ask-row">
+      <button class="btn btn-primary" type="submit" id="ask">Ask Guide</button>
+      <p class="hint">Enter to ask. Shift+Enter for a new line.</p>
+    </div>
+  </form>
+
+  <div class="examples">
+    <span class="examples-label">Examples</span>
+    <button type="button" class="chip" data-example="battery">Cited battery answer</button>
+    <button type="button" class="chip" data-example="kit">Beginner RC kit</button>
+    <button type="button" class="chip" data-example="miss">Not in the guides</button>
   </div>
 
-  <div class="layout">
-    <div>
-      <section class="panel">
-        <form class="panel-body composer" id="form">
-          <label for="q">Customer question</label>
-          <textarea id="q" maxlength="1000" placeholder="e.g. Which battery is safe for the Trailblazer truck?"></textarea>
-          <div class="composer-row">
-            <span class="meta">Enter to ask · Shift+Enter for a new line</span>
-            <button class="btn btn-primary" type="submit" id="ask">Ask</button>
-          </div>
-        </form>
-      </section>
+  <div class="notice notice-bad" id="error" hidden></div>
 
-      <section class="panel" id="result" hidden>
-        <div class="panel-head"><h2>Answer</h2><span class="readonly" id="retrieved"></span></div>
-        <div class="panel-body">
-          <p class="question-echo" id="echo"></p>
+  <section class="result" id="result" hidden aria-live="polite">
+    <div id="pending"></div>
+    <div id="hit" hidden>
+      <div class="result-grid">
+        <div>
+          <h2>Answer</h2>
+          <p class="echo" id="echo"></p>
           <div class="answer" id="answer"></div>
-          <div id="answer-notice"></div>
+          <div id="refusal"></div>
         </div>
-      </section>
-      <div class="notice notice-bad" id="error" hidden></div>
+        <div>
+          <h2>Documents used</h2>
+          <ul class="sources" id="sources"></ul>
+          <p class="meta" id="retrieved"></p>
+          <h2 class="subhead">Catalog SKUs named</h2>
+          <div id="skus"></div>
+        </div>
+      </div>
     </div>
+    <div id="miss" hidden>
+      <h2>No documents matched</h2>
+      <p class="miss-echo" id="miss-echo"></p>
+      <p class="miss-detail" id="miss-detail"></p>
+      <p class="miss-docs">Documents used: none.</p>
+    </div>
+    <p class="served" id="served" hidden></p>
+  </section>
 
-    <aside>
-      <section class="panel">
-        <div class="panel-head"><h2>Common questions</h2></div>
-        <ul class="quick">
-          <li><button type="button" data-q="Which battery pack is safe for the Trailblazer beginner RC truck, and what is the return window if the customer changes their mind?"><span class="q-title">Safe battery and returns</span><span class="q-text">Trailblazer truck pack, return window</span></button></li>
-          <li><button type="button" data-q="Build a beginner RC kit for a 10-year-old. The customer wants to power the truck with loose AA batteries."><span class="q-title">Beginner RC kit</span><span class="q-text">Customer wants to use loose AA cells</span></button></li>
-          <li><button type="button" data-q="How should a customer store a LiPo pack between uses?"><span class="q-title">LiPo storage</span><span class="q-text">Care between uses</span></button></li>
-        </ul>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>Guides used</h2></div>
-        <div class="panel-body"><ul class="sources" id="sources"><li class="empty">Ask a question to see sources.</li></ul></div>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>Products in this answer</h2></div>
-        <div class="panel-body" id="products"><p class="empty">Catalog items mentioned in the answer appear here.</p></div>
-      </section>
-    </aside>
-  </div>
+  <section class="catalog" id="product-page">
+    <h2>Product page</h2>
+    <p class="catalog-caption" id="catalog-caption">Loading the sample catalog…</p>
+    <div id="catalog-list"></div>
+    <div class="notice notice-bad" id="catalog-error" hidden></div>
+  </section>
 
-  <p class="footnote">Proof-of-concept application. Sample products and guides are demo content, not AnyCompany policy.</p>
+  <p class="footnote">Sample catalog and guides for this proof of concept. Not an AnyCompany system.</p>
 </main>
-
 <script src="common.js"></script>
-<script>
-const form = $('#form'), q = $('#q'), ask = $('#ask');
-document.querySelectorAll('.quick button').forEach(b => b.addEventListener('click', () => { q.value = b.dataset.q; run(); }));
-form.addEventListener('submit', e => { e.preventDefault(); run(); });
-q.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } });
-
-function formatAnswer(text, skus) {
-  let html = esc(text);
-  for (const p of skus) html = html.split(esc(p.sku)).join(`<span class="sku">${esc(p.sku)}</span>`);
-  return html.replace(/\[([\w.-]+\.md)\]/g, '<span class="cite">[$1]</span>');
-}
-
-async function run() {
-  const question = q.value.trim();
-  if (!question) { q.focus(); return; }
-  ask.disabled = true; ask.textContent = 'Searching guides…';
-  $('#error').hidden = true;
-  $('#result').hidden = false;
-  $('#echo').innerHTML = `Question: <strong>${esc(question)}</strong>`;
-  $('#answer').innerHTML = skeleton(4);
-  $('#answer-notice').innerHTML = '';
-  $('#retrieved').textContent = '';
-  try {
-    const d = await api('/api/chat', { question });
-    $('#answer').innerHTML = formatAnswer(d.answer, d.skus || []);
-    $('#retrieved').textContent = d.retrieved ? `${d.retrieved} guide passages` : 'No match';
-    if (!d.sources || !d.sources.length) {
-      $('#answer-notice').innerHTML = '<div class="notice notice-warn">Nothing in the product guides covers this, so no answer was generated.</div>';
-    }
-    $('#sources').innerHTML = (d.sources || []).length
-      ? d.sources.map(s => `<li><span class="doc-icon" aria-hidden="true"></span>${esc(s)}</li>`).join('')
-      : '<li class="empty">No guides matched.</li>';
-    $('#products').innerHTML = (d.skus || []).length
-      ? d.skus.map(p => `<div class="product"><span class="name">${esc(p.name)}</span><span class="price">${money(p.price)}</span><span class="sku-line">${esc(p.sku)}</span>${stockBadge(p.stock)}</div>`).join('')
-      : '<p class="empty">No catalog items in this answer.</p>';
-  } catch (e) {
-    $('#result').hidden = true;
-    $('#error').textContent = e.message;
-    $('#error').hidden = false;
-  } finally {
-    ask.disabled = false; ask.textContent = 'Ask';
-  }
-}
-</script>
 </body>
 </html>

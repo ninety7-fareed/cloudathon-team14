@@ -6,132 +6,77 @@
 <title>Shiftlead · CounterGuide</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
-<header class="topbar"><div class="topbar-inner">
-  <div class="brand"><span class="brand-mark">C</span>CounterGuide <small>AnyCompany</small></div>
-  <nav class="tabs" aria-label="Sections">
-    <a href="index.html">Guide chat</a>
-    <a href="products.html">Products</a>
-    <a href="platform.html" aria-current="page">Platform · Shiftlead</a>
-  </nav>
-  <div class="context">Platform team view</div>
-</div></header>
+<body data-view="shiftlead">
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">C</span><span>CounterGuide</span></a>
+    <nav class="views" aria-label="Views">
+      <a href="index.html">Guide</a>
+      <a href="platform.html" aria-current="page">Shiftlead</a>
+    </nav>
+  </div>
+</header>
 
 <main class="page">
-  <div class="page-head">
-    <div>
-      <h1>Shiftlead</h1>
-      <p>Reads this application's health, request log and runbooks, then names the tier at fault and proposes one next action. It never changes infrastructure; a person ships fixes through CloudFormation.</p>
+  <p class="role">Platform team</p>
+  <h1>Shiftlead</h1>
+  <p class="lede">Ask why the product page is erroring. Shiftlead names the tier at fault and the next action. The page does not apply the change. A person ships it with CloudFormation.</p>
+
+  <section class="setup">
+    <h2>Product-page example</h2>
+    <p>Record five simulated failed product-page requests, then diagnose. No infrastructure is changed. The rows are marked simulated.</p>
+    <div class="setup-actions">
+      <button class="btn btn-secondary" type="button" id="sim">Record simulated product-page errors</button>
+      <button class="btn btn-quiet" type="button" id="clr">Clear simulated rows</button>
+      <p class="hint" id="simout" role="status"></p>
     </div>
-    <span class="readonly">Read-only</span>
-  </div>
+  </section>
 
-  <div class="layout">
-    <div>
-      <section class="panel">
-        <form class="panel-body composer" id="form">
-          <label for="q">What's wrong?</label>
-          <textarea id="q" maxlength="1000" placeholder="e.g. The product page is erroring"></textarea>
-          <div class="composer-row">
-            <span class="meta">Scope: CounterGuide only</span>
-            <button class="btn btn-primary" type="submit" id="ask">Diagnose</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel" id="result" hidden>
-        <div class="panel-head"><h2>Diagnosis</h2><span class="readonly">Proposal only</span></div>
-        <div class="panel-body">
-          <div class="answer" id="answer"></div>
-          <div class="notice notice-info" id="note" hidden></div>
-        </div>
-      </section>
-      <div class="notice notice-bad" id="error" hidden></div>
-
-      <section class="sim">
-        <h2>Demo simulation</h2>
-        <p>Writes five <strong>simulated</strong> failed product-page requests to the request log so Shiftlead has a fault to diagnose. No AWS resource is changed; rows are marked <code>simulated</code>.</p>
-        <div class="actions">
-          <button class="btn btn-secondary" type="button" id="sim">Record simulated errors</button>
-          <button class="btn btn-secondary" type="button" id="clr">Clear simulated rows</button>
-          <span class="result" id="simout"></span>
-        </div>
-      </section>
+  <form class="ask" id="shift-form">
+    <div class="field">
+      <label for="q">Question</label>
+      <textarea id="q" maxlength="1000">Why is the product page erroring?</textarea>
     </div>
+    <div class="ask-row">
+      <button class="btn btn-primary" type="submit" id="ask">Diagnose</button>
+      <p class="hint">Reads this application only.</p>
+    </div>
+  </form>
 
-    <aside>
-      <section class="panel">
-        <div class="panel-head"><h2>Common checks</h2></div>
-        <ul class="quick">
-          <li><button type="button" data-q="Why is the product page erroring?"><span class="q-title">Product page errors</span><span class="q-text">Find the failing tier</span></button></li>
-          <li><button type="button" data-q="Is CounterGuide healthy right now? Check every tier."><span class="q-title">Full health check</span><span class="q-text">Web, application and data tiers</span></button></li>
-        </ul>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>Checks Shiftlead ran</h2></div>
-        <div class="panel-body">
-          <ul class="checks" id="checks"><li class="empty" style="display:block">Run a diagnosis to see the read-only checks.</li></ul>
-          <details class="raw" id="rawwrap" hidden><summary>Raw results</summary><pre id="raw"></pre></details>
+  <div class="notice notice-bad" id="error" hidden></div>
+
+  <section class="result" id="result" hidden aria-live="polite">
+    <div id="pending"></div>
+    <div id="diagnosis" hidden>
+      <div class="diagnosis">
+        <div class="stat" id="tier-wrap">
+          <span class="stat-label">Tier at fault</span>
+          <strong id="tier"></strong>
         </div>
-      </section>
-    </aside>
-  </div>
+        <div class="stat" id="action-wrap">
+          <span class="stat-label">Next action</span>
+          <p id="action"></p>
+        </div>
+      </div>
+      <p class="ship" id="ship"></p>
+    </div>
+    <div id="reply-wrap" hidden>
+      <h2>Reply</h2>
+      <div class="answer" id="answer"></div>
+    </div>
+    <div id="checks-wrap" hidden>
+      <h2 class="subhead">What Shiftlead read</h2>
+      <ul class="checks" id="checks"></ul>
+      <details class="raw" id="rawwrap" hidden>
+        <summary>Readings</summary>
+        <pre id="raw"></pre>
+      </details>
+    </div>
+    <p class="served" id="served" hidden></p>
+  </section>
+
+  <p class="footnote">Sample application for this proof of concept. Not an AnyCompany system.</p>
 </main>
-
 <script src="common.js"></script>
-<script>
-const LABELS = {
-  read_load_balancer_target_health: ['Load balancer targets', 'application'],
-  read_service_status: ['ECS service', 'application'],
-  read_database_status: ['Aurora database', 'data'],
-  read_knowledge_base_sync_status: ['Knowledge base sync', 'data'],
-  read_cloudwatch_alarms: ['CloudWatch alarms', 'all tiers'],
-  read_request_log: ['Request log', 'application'],
-};
-let sessionId = null;
-const q = $('#q'), ask = $('#ask');
-document.querySelectorAll('.quick button').forEach(b => b.addEventListener('click', () => { q.value = b.dataset.q; run(); }));
-$('#form').addEventListener('submit', e => { e.preventDefault(); run(); });
-q.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } });
-
-function hasProblem(r) {
-  if (!r || typeof r !== 'object') return false;
-  return Boolean(r.error) || (r.recentErrors > 0) || /no \(/.test(r.reachableFromApplication || '');
-}
-
-async function run() {
-  const question = q.value.trim();
-  if (!question) { q.focus(); return; }
-  ask.disabled = true; ask.textContent = 'Checking…';
-  $('#error').hidden = true; $('#result').hidden = false; $('#note').hidden = true;
-  $('#answer').innerHTML = skeleton(4);
-  try {
-    const d = await api('/api/shiftlead', { question, sessionId });
-    sessionId = d.sessionId;
-    $('#answer').textContent = d.answer;
-    if (d.note) { $('#note').textContent = d.note; $('#note').hidden = false; }
-    const runs = d.toolsRun || [];
-    $('#checks').innerHTML = runs.length ? runs.map(t => {
-      const [label, tier] = LABELS[t.tool] || [t.tool, ''];
-      return `<li><span class="dot${hasProblem(t.result) ? ' bad' : ''}"></span><span>${esc(label)}</span><span class="tag">${esc(tier)}</span></li>`;
-    }).join('') : '<li class="empty" style="display:block">No checks were needed.</li>';
-    $('#raw').textContent = JSON.stringify(runs, null, 2);
-    $('#rawwrap').hidden = !runs.length;
-  } catch (e) {
-    $('#result').hidden = true;
-    $('#error').textContent = e.message; $('#error').hidden = false;
-  } finally {
-    ask.disabled = false; ask.textContent = 'Diagnose';
-  }
-}
-
-async function sim(path) {
-  $('#simout').textContent = 'Working…';
-  try { const d = await api(path); $('#simout').textContent = d.note || 'Done.'; }
-  catch (e) { $('#simout').textContent = e.message; }
-}
-$('#sim').addEventListener('click', () => sim('/api/demo/simulate-product-page-errors'));
-$('#clr').addEventListener('click', () => sim('/api/demo/clear-simulated'));
-</script>
 </body>
 </html>

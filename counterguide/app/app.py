@@ -408,6 +408,41 @@ def run_tool(name):
         return {"error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
+def local_shiftlead():
+    """Read-only diagnosis when no Bedrock agent is configured. Proposes only."""
+    trace = [{"tool": name, "result": run_tool(name)} for name in TOOLS]
+    by_name = {item["tool"]: item["result"] for item in trace}
+    notes = []
+    tier = None
+    request_log = by_name.get("read_request_log") or {}
+    if request_log.get("recentErrors"):
+        tier = "data"
+        notes.append(f"The request log shows {request_log['recentErrors']} recent errors.")
+    database = by_name.get("read_database_status") or {}
+    if str(database.get("reachableFromApplication", "")).startswith("no"):
+        tier = "data"
+        notes.append("The application cannot reach Aurora.")
+    elif database.get("status") and database.get("status") != "available":
+        tier = "data"
+        notes.append(f"Aurora status is {database.get('status')}.")
+    service = by_name.get("read_service_status") or {}
+    for item in service.get("services") or []:
+        if item.get("running", 0) < 2:
+            tier = tier or "application"
+            notes.append("Fewer than two application tasks are running.")
+    if tier is None:
+        answer = (
+            "The read-only checks did not show a fault. "
+            "No change was applied. A person ships any CloudFormation change."
+        )
+    else:
+        answer = (
+            f"Tier at fault: {tier}. " + " ".join(notes) +
+            " Next action: a person ships the change with CloudFormation. Shiftlead did not apply it."
+        )
+    return answer, trace
+
+
 @app.post("/api/shiftlead")
 def shiftlead():
     body = request.get_json(silent=True) or {}
@@ -415,6 +450,11 @@ def shiftlead():
     if not question:
         return jsonify(error="Ask a question."), 400
     session_id = body.get("sessionId") or str(uuid.uuid4())
+    if not AGENT_ID or not AGENT_ALIAS_ID:
+        answer, trace = local_shiftlead()
+        write_request_log("/api/shiftlead", 200, "application", _elapsed_ms(), "local read-only")
+        return jsonify(answer=answer, toolsRun=_json_safe(trace), sessionId=session_id,
+                       note="Proposal only. A person ships any change through CloudFormation.")
     rt = client("bedrock-agent-runtime")
     trace = []
     answer = ""

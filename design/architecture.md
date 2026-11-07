@@ -111,10 +111,10 @@ The template does not contain a password.
 Two Bedrock Knowledge Bases use two private S3 buckets as document sources.
 One bucket holds product guides.
 The other holds operations runbooks.
-Embeddings are stored in Amazon S3 Vectors, one index per knowledge base, in one vector bucket.
+Embeddings are stored in Amazon OpenSearch Serverless, one index per knowledge base, in one vector collection.
+Standby replicas on that collection are disabled.
 The catalog database is not the vector store.
 A guide re-ingest does not write the catalog.
-OpenSearch Serverless is not part of this design.
 
 Shiftlead is one Bedrock Agent.
 Its foundation model parameter defaults to the Amazon Nova Pro inference profile `us.amazon.nova-pro-v1:0`.
@@ -223,7 +223,7 @@ The intended order, when a later deploy is authorized, is:
 1. `design/cloudformation/network.yaml` creates the VPC, subnets, two NAT gateways, and the S3 gateway endpoint.
 2. `design/cloudformation/repository.yaml` creates the ECR repository.
    Push the CounterGuide image before the application stack.
-3. `design/cloudformation/knowledge.yaml` creates the document buckets, S3 Vectors indexes, both knowledge bases, and the Shiftlead agent.
+3. `design/cloudformation/knowledge.yaml` creates the document buckets, one OpenSearch Serverless collection with two indexes, both knowledge bases, and the Shiftlead agent.
    This stack does not create the web tier.
 4. `design/cloudformation/application.yaml` creates Aurora, the load balancer, the Fargate service, secrets, logs, and alarms.
    It imports the network, repository, and knowledge stacks.
@@ -241,7 +241,7 @@ No template contains a database password.
 | Amazon CloudFront | Edge delivery of the static views and the `/api/*` path | One distribution, S3 origin and load balancer origin |
 | AWS WAF | Filter on the CloudFront distribution | One CLOUDFRONT web ACL in us-east-1 with the common rule set |
 | Amazon S3 | Static front end and the two document sources | Three private buckets, objects stored across Availability Zones by S3 |
-| Amazon S3 Vectors | Vector indexes for the two knowledge bases | One vector bucket, two indexes |
+| Amazon OpenSearch Serverless | Vector indexes for the two knowledge bases | One vector collection, two indexes, standby replicas disabled |
 | Amazon ECR | CounterGuide container image | One repository in us-east-1. Tasks in both Availability Zones pull it |
 | Amazon ECS on Fargate | Application tier, no guest OS to patch | One service, at least two tasks, two private subnets |
 | Application Load Balancer | Entry from CloudFront to Fargate | One load balancer in two public subnets |
@@ -266,7 +266,7 @@ This proof of concept uses a dedicated network.
 A later application adds another application service, another database schema, and two knowledge bases.
 It does not add a second NAT pair unless a later decision gives it a separate VPC.
 Estimate, not a quote and not a measurement in this account: a highly available managed stack is about $210–$228 per month in list price if left running, using public list prices as of 7 Nov 2026.
-S3 Vectors is the vector store so this design does not add an OpenSearch Serverless collection per knowledge base.
+OpenSearch Serverless is the vector store: one collection for both knowledge bases, with standby replicas disabled.
 
 ## Intentionally absent
 
@@ -275,7 +275,6 @@ S3 Vectors is the vector store so this design does not add an OpenSearch Serverl
 - Routine operating-system patching and SSH.
 - A single NAT gateway.
 - A single-AZ database.
-- Amazon OpenSearch Serverless.
 - Automatic remediation and account-wide troubleshooting.
 - An answer from general model knowledge when retrieval finds nothing.
 - Checkout, payments, a full inventory system, and a store locator.

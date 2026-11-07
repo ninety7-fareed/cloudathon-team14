@@ -28,8 +28,12 @@ They are not measurements.
   Nova Pro is the chat and agent model.
   It is not the embedding model.
   Embedding access is not confirmed enabled in this account.
-- Assumption: Amazon S3 Vectors is available in `us-east-1` for the two knowledge-base indexes.
-  The workshop did not name S3 Vectors as blocked.
+- Verified fact, not a guess: Amazon S3 Vectors cannot be created by `WSParticipantRole/Participant` in account `231075364174`.
+  `s3vectors:CreateVectorBucket` returned 403 on 7 Nov 2026 because the identity policy does not allow it.
+- Verified fact, not a guess: Amazon OpenSearch Serverless is allowed for that role.
+  `ListCollections` succeeded, and the policy simulator allows creating a collection, security policy, access policy, and index.
+  The knowledge stack uses one OpenSearch Serverless vector collection, with standby replicas disabled, for both knowledge bases.
+  Checked 7 Nov 2026.
   Aurora, CloudFront, and CloudFormation were not named as blocked.
 - Assumption: CloudFront edge locations are the mechanism that shortens the path for remote customers.
   No latency number was measured.

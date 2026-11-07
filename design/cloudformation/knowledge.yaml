@@ -1,11 +1,13 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CounterGuide knowledge stack. Two S3 document buckets, one S3 Vectors bucket
-  with two indexes, two Bedrock Knowledge Bases, and a read-only Shiftlead
-  Bedrock Agent. This stack does not create the web tier. A guide or runbook
-  re-ingest updates this stack's buckets and knowledge bases only.
-  Deploy only as WSParticipantRole/Participant in account 231075364174,
-  region us-east-1. Do not use the local AWS CLI default profile.
+  CounterGuide knowledge stack. Two S3 document buckets, one OpenSearch
+  Serverless vector collection with two indexes, two Bedrock Knowledge Bases,
+  and a read-only Shiftlead Bedrock Agent. S3 Vectors is not used:
+  s3vectors:CreateVectorBucket is denied for WSParticipantRole/Participant.
+  This stack does not create the web tier or the catalog Aurora cluster.
+  A guide or runbook re-ingest updates this stack's buckets and knowledge
+  bases only. Deploy only as WSParticipantRole/Participant in account
+  231075364174, region us-east-1. Do not use the local AWS CLI default profile.
 
 Parameters:
   DeployRegion:
@@ -88,28 +90,32 @@ Resources:
             Status: Enabled
             NoncurrentVersionExpiration: { NoncurrentDays: 30 }
 
-  VectorBucket:
-    Type: AWS::S3Vectors::VectorBucket
+  VectorEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
-      VectorBucketName: !Sub "counterguide-vectors-${AWS::AccountId}"
+      Name: counterguide-vec-enc
+      Type: encryption
+      Description: AWS-owned key for the CounterGuide vector collection.
+      Policy: '{"Rules":[{"ResourceType":"collection","Resource":["collection/counterguide-vectors"]}],"AWSOwnedKey":true}'
 
-  ProductIndex:
-    Type: AWS::S3Vectors::Index
+  VectorNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
-      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
-      IndexName: product-guides
-      DataType: float32
-      Dimension: !Ref EmbeddingDimension
-      DistanceMetric: cosine
+      Name: counterguide-vec-net
+      Type: network
+      Description: Public collection endpoint. Data-access policy limits who can call it.
+      Policy: '[{"Rules":[{"ResourceType":"collection","Resource":["collection/counterguide-vectors"]}],"AllowFromPublic":true}]'
 
-  RunbookIndex:
-    Type: AWS::S3Vectors::Index
+  VectorCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn: [VectorEncryptionPolicy, VectorNetworkPolicy]
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
-      IndexName: operations-runbooks
-      DataType: float32
-      Dimension: !Ref EmbeddingDimension
-      DistanceMetric: cosine
+      Name: counterguide-vectors
+      Type: VECTORSEARCH
+      StandbyReplicas: DISABLED
+      Description: Vector store for the two CounterGuide knowledge bases.
 
   KnowledgeBaseRole:
     Type: AWS::IAM::Role
@@ -142,24 +148,80 @@ Resources:
                   - !Sub "${GuidesBucket.Arn}/*"
                   - !Sub "${RunbooksBucket.Arn}/*"
               - Effect: Allow
-                Action: [s3vectors:GetVectorBucket]
-                Resource: !GetAtt VectorBucket.VectorBucketArn
-              - Effect: Allow
-                Action:
-                  - s3vectors:GetIndex
-                  - s3vectors:QueryVectors
-                  - s3vectors:PutVectors
-                  - s3vectors:GetVectors
-                  - s3vectors:DeleteVectors
-                Resource:
-                  - !GetAtt ProductIndex.IndexArn
-                  - !GetAtt RunbookIndex.IndexArn
+                Action: [aoss:APIAccessAll]
+                Resource: !GetAtt VectorCollection.Arn
               - Effect: Allow
                 Action: [bedrock:InvokeModel]
                 Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
 
+  VectorAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: counterguide-vec-data
+      Type: data
+      Description: Deploy role creates indexes. Knowledge-base role reads and writes vectors.
+      Policy: !Sub
+        - '[{"Rules":[{"ResourceType":"collection","Resource":["collection/counterguide-vectors"],"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]},{"ResourceType":"index","Resource":["index/counterguide-vectors/*"],"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]}],"Principal":["${DeployRole}","${KnowledgeRole}"]}]'
+        - DeployRole: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/WSParticipantRole"
+          KnowledgeRole: !GetAtt KnowledgeBaseRole.Arn
+
+  ProductIndex:
+    Type: AWS::OpenSearchServerless::Index
+    DependsOn: VectorAccessPolicy
+    Properties:
+      CollectionEndpoint: !GetAtt VectorCollection.CollectionEndpoint
+      IndexName: product-guides
+      Settings:
+        Index:
+          Knn: true
+      Mappings:
+        Properties:
+          embedding:
+            Type: knn_vector
+            Dimension: !Ref EmbeddingDimension
+            Method:
+              Name: hnsw
+              Engine: faiss
+              SpaceType: cosinesimil
+              Parameters:
+                EfConstruction: 512
+                M: 16
+          text:
+            Type: text
+          metadata:
+            Type: text
+            Index: false
+
+  RunbookIndex:
+    Type: AWS::OpenSearchServerless::Index
+    DependsOn: VectorAccessPolicy
+    Properties:
+      CollectionEndpoint: !GetAtt VectorCollection.CollectionEndpoint
+      IndexName: operations-runbooks
+      Settings:
+        Index:
+          Knn: true
+      Mappings:
+        Properties:
+          embedding:
+            Type: knn_vector
+            Dimension: !Ref EmbeddingDimension
+            Method:
+              Name: hnsw
+              Engine: faiss
+              SpaceType: cosinesimil
+              Parameters:
+                EfConstruction: 512
+                M: 16
+          text:
+            Type: text
+          metadata:
+            Type: text
+            Index: false
+
   ProductKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: ProductIndex
     Properties:
       Name: counterguide-product-guides
       Description: Product guides for battery safety, device care, hobby setup, and the return window.
@@ -169,13 +231,18 @@ Resources:
         VectorKnowledgeBaseConfiguration:
           EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
       StorageConfiguration:
-        Type: S3_VECTORS
-        S3VectorsConfiguration:
-          IndexArn: !GetAtt ProductIndex.IndexArn
-          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt VectorCollection.Arn
+          VectorIndexName: product-guides
+          FieldMapping:
+            VectorField: embedding
+            TextField: text
+            MetadataField: metadata
 
   RunbookKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: RunbookIndex
     Properties:
       Name: counterguide-operations-runbooks
       Description: Operations runbooks for the CounterGuide load balancer, service, database, and knowledge-base sync.
@@ -185,10 +252,14 @@ Resources:
         VectorKnowledgeBaseConfiguration:
           EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
       StorageConfiguration:
-        Type: S3_VECTORS
-        S3VectorsConfiguration:
-          IndexArn: !GetAtt RunbookIndex.IndexArn
-          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt VectorCollection.Arn
+          VectorIndexName: operations-runbooks
+          FieldMapping:
+            VectorField: embedding
+            TextField: text
+            MetadataField: metadata
 
   GuidesDataSource:
     Type: AWS::Bedrock::DataSource

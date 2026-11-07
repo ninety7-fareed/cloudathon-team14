@@ -6,8 +6,10 @@ Description: >
   The load balancer accepts traffic only from the CloudFront origin-facing
   prefix list and only with the generated origin header. No EC2 instances.
   No automatic remediation. Deploy only as WSParticipantRole/Participant in
-  account 231075364174, region us-east-1. Requires the network, repository,
-  and knowledge stacks. Do not use the local AWS CLI default profile.
+  account 231075364174, region us-east-1. Requires the network and repository
+  stacks. Knowledge base IDs are parameters for bases that already exist.
+  This stack does not import counterguide-knowledge and does not create a Bedrock agent.
+  Do not use the local AWS CLI default profile.
 
 Parameters:
   DeployRegion:
@@ -21,9 +23,26 @@ Parameters:
   RepositoryStackName:
     Type: String
     Default: counterguide-repository
-  KnowledgeStackName:
+  ProductKnowledgeBaseId:
     Type: String
-    Default: counterguide-knowledge
+    Default: ZQ70XBP7SG
+    AllowedPattern: "[A-Z0-9]{10}"
+    Description: Existing product-guides knowledge base ID. This stack does not create it.
+  RunbookKnowledgeBaseId:
+    Type: String
+    Default: DNNYCEGC0J
+    AllowedPattern: "[A-Z0-9]{10}"
+    Description: Existing operations-runbooks knowledge base ID. This stack does not create a Bedrock agent.
+  GuidesDataSourceId:
+    Type: String
+    Default: 6GAIFSAUNX
+    AllowedPattern: "[A-Z0-9]{10}"
+    Description: Existing product-guides data source. Used only to report sync status.
+  RunbooksDataSourceId:
+    Type: String
+    Default: HTOJ0UMO3J
+    AllowedPattern: "[A-Z0-9]{10}"
+    Description: Existing operations-runbooks data source. Used only to report sync status.
   ImageTag:
     Type: String
     Default: latest
@@ -54,8 +73,8 @@ Parameters:
     Description: Starting memory in MiB. 1024 is valid with 512 CPU. Not a measured size.
   AuroraEngineVersion:
     Type: String
-    Default: "16.6"
-    Description: Starting Aurora PostgreSQL version. Change if 16.6 is not offered in us-east-1.
+    Default: "16.8"
+    Description: Aurora PostgreSQL version offered in us-east-1. 16.6 is not available in this account.
   MinAcu:
     Type: Number
     Default: 0.5
@@ -303,23 +322,20 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: [bedrock:Retrieve]
-                Resource: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ProductKnowledgeBaseArn" }
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${ProductKnowledgeBaseId}"
               - Effect: Allow
                 Action: [bedrock:InvokeModel]
                 Resource:
                   - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0"
                   - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${FoundationModelId}"
               - Effect: Allow
-                Action: [bedrock:InvokeAgent]
-                Resource: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ShiftleadAgentAliasArn" }
-              - Effect: Allow
                 Action:
                   - bedrock:GetKnowledgeBase
                   - bedrock:ListIngestionJobs
                   - bedrock:GetIngestionJob
                 Resource:
-                  - { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ProductKnowledgeBaseArn" }
-                  - { "Fn::ImportValue": !Sub "${KnowledgeStackName}-RunbookKnowledgeBaseArn" }
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${ProductKnowledgeBaseId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${RunbookKnowledgeBaseId}"
               - Effect: Allow
                 Action: [cloudwatch:DescribeAlarms]
                 Resource:
@@ -395,14 +411,10 @@ Resources:
             - { Name: DB_NAME, Value: counterguide }
             - { Name: DB_PORT, Value: "5432" }
             - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
-            - Name: PRODUCT_KB_ID
-              Value: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ProductKnowledgeBaseId" }
-            - Name: RUNBOOK_KB_ID
-              Value: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-RunbookKnowledgeBaseId" }
-            - Name: SHIFTLEAD_AGENT_ID
-              Value: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ShiftleadAgentId" }
-            - Name: SHIFTLEAD_AGENT_ALIAS_ID
-              Value: { "Fn::ImportValue": !Sub "${KnowledgeStackName}-ShiftleadAgentAliasId" }
+            - { Name: PRODUCT_KB_ID, Value: !Ref ProductKnowledgeBaseId }
+            - { Name: RUNBOOK_KB_ID, Value: !Ref RunbookKnowledgeBaseId }
+            - { Name: GUIDES_DATA_SOURCE_ID, Value: !Ref GuidesDataSourceId }
+            - { Name: RUNBOOKS_DATA_SOURCE_ID, Value: !Ref RunbooksDataSourceId }
             - { Name: FOUNDATION_MODEL_ID, Value: !Ref FoundationModelId }
           Secrets:
             - Name: DB_USERNAME

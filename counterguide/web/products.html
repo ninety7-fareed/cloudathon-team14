@@ -3,77 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Products · CounterGuide</title>
+<meta http-equiv="refresh" content="0; url=index.html#product-page">
+<title>Product page · CounterGuide</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="topbar"><div class="topbar-inner">
-  <div class="brand"><span class="brand-mark">C</span>CounterGuide <small>AnyCompany</small></div>
-  <nav class="tabs" aria-label="Sections">
-    <a href="index.html">Guide chat</a>
-    <a href="products.html" aria-current="page">Products</a>
-    <a href="platform.html">Platform · Shiftlead</a>
-  </nav>
-  <div class="context">Store associate view</div>
-</div></header>
-
 <main class="page">
-  <div class="page-head">
-    <div>
-      <h1>Products</h1>
-      <p>Live catalog and stock, read from the database through the application tier.</p>
-    </div>
-    <span class="readonly" id="count"></span>
-  </div>
-
-  <section class="panel">
-    <div class="toolbar">
-      <input id="search" type="search" placeholder="Search name or SKU" aria-label="Search products">
-      <div class="segmented" role="group" aria-label="Category">
-        <button type="button" data-cat="" aria-pressed="true">All</button>
-        <button type="button" data-cat="batteries" aria-pressed="false">Batteries</button>
-        <button type="button" data-cat="hobby equipment" aria-pressed="false">Hobby</button>
-        <button type="button" data-cat="cell phones" aria-pressed="false">Phones</button>
-        <button type="button" data-cat="electronics" aria-pressed="false">Electronics</button>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>SKU</th><th>Product</th><th>Category</th><th class="num">Price</th><th class="num">Stock</th></tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
-  </section>
-  <div class="notice notice-bad" id="error" hidden></div>
-
-  <p class="footnote">Sample catalog for the proof of concept.</p>
+  <p>The product page is part of Guide. <a href="index.html#product-page">Open Guide</a>.</p>
 </main>
-
-<script src="common.js"></script>
-<script>
-let all = [], cat = '';
-const rows = $('#rows');
-rows.innerHTML = `<tr><td colspan="5">${skeleton(3)}</td></tr>`;
-
-function render() {
-  const term = $('#search').value.trim().toLowerCase();
-  const list = all.filter(p => (!cat || p.category === cat) && (!term || p.name.toLowerCase().includes(term) || p.sku.toLowerCase().includes(term)));
-  $('#count').textContent = `${list.length} of ${all.length} items`;
-  rows.innerHTML = list.length
-    ? list.map(p => `<tr><td class="mono">${esc(p.sku)}</td><td><div>${esc(p.name)}</div><div class="desc">${esc(p.description)}</div></td><td>${esc(p.category)}</td><td class="num">${money(p.price)}</td><td class="num">${stockBadge(p.stock)}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="empty">No products match.</td></tr>';
-}
-
-document.querySelectorAll('.segmented button').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('.segmented button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-  cat = b.dataset.cat; render();
-}));
-$('#search').addEventListener('input', render);
-
-api('/api/products').then(d => { all = d.products || []; render(); }).catch(e => {
-  rows.innerHTML = '<tr><td colspan="5" class="empty">The product page could not load the catalog.</td></tr>';
-  $('#error').textContent = e.message; $('#error').hidden = false;
-});
-</script>
 </body>
 </html>

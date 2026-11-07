@@ -17,7 +17,11 @@ Parameters:
   ApplicationStackName:
     Type: String
     Default: counterguide-application
-    Description: Stack that exports the load balancer DNS name. Default counterguide-application.
+    Description: Application stack name. The load balancer DNS is passed directly so this stack does not wait on that stack export.
+  AlbDnsName:
+    Type: String
+    Default: ""
+    Description: DNS name of the application load balancer. Required. Do not import counterguide-knowledge.
   DomainName:
     Type: String
     Default: ""
@@ -124,7 +128,7 @@ Resources:
             S3OriginConfig:
               OriginAccessIdentity: ""
           - Id: app
-            DomainName: { "Fn::ImportValue": !Sub "${ApplicationStackName}-AlbDnsName" }
+            DomainName: !Ref AlbDnsName
             CustomOriginConfig:
               OriginProtocolPolicy: http-only
               HTTPPort: 80
