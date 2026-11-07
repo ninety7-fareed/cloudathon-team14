@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CounterGuide - Guide chat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>CounterGuide</h1>
+  <nav><a href="index.html" class="active">Guide chat</a> <a href="products.html">Product page</a> <a href="platform.html">Shiftlead (platform team)</a></nav>
+</header>
+<main>
+  <p class="hint">Ask about battery safety, device care, hobby setup or returns. Answers come only from AnyCompany product guides and the catalog.</p>
+  <div class="examples">
+    <button data-q="Which battery pack is safe for the Trailblazer beginner RC truck, and what is the return window if the customer changes their mind?">Cited battery answer</button>
+    <button data-q="Build a beginner RC kit for a 10-year-old. The customer wants to power the truck with loose AA batteries.">Beginner RC kit</button>
+    <button data-q="What is the capital of France?">Out-of-scope question</button>
+  </div>
+  <form id="f">
+    <textarea id="q" rows="3" maxlength="1000" placeholder="Type the customer's question..."></textarea>
+    <button type="submit" id="send">Ask</button>
+  </form>
+  <section id="out" hidden>
+    <h2>Answer</h2>
+    <div id="answer"></div>
+    <h3>Documents used</h3>
+    <ul id="sources"></ul>
+    <h3>Catalog items in this answer</h3>
+    <table id="skus"><thead><tr><th>SKU</th><th>Name</th><th>Price</th><th>Stock</th></tr></thead><tbody></tbody></table>
+  </section>
+  <p id="err" class="err" hidden></p>
+</main>
+<footer>Demo application for the Cloudathon proof of concept. Sample products and guides are demo assumptions, not real AnyCompany policy.</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+document.querySelectorAll('.examples button').forEach(b => b.onclick = () => { $('q').value = b.dataset.q; ask(); });
+$('f').onsubmit = (e) => { e.preventDefault(); ask(); };
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function ask(){
+  const q = $('q').value.trim(); if (!q) return;
+  $('send').disabled = true; $('send').textContent = 'Thinking...'; $('err').hidden = true;
+  try {
+    const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    $('answer').innerHTML = esc(d.answer).replace(/\n/g,'<br>');
+    $('sources').innerHTML = d.sources.length ? d.sources.map(s => '<li>' + esc(s) + '</li>').join('') : '<li>None - nothing matched in the guides</li>';
+    $('skus').querySelector('tbody').innerHTML = d.skus.length ? d.skus.map(p => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td><td>$${esc(p.price)}</td><td>${esc(p.stock)}</td></tr>`).join('') : '<tr><td colspan="4">No catalog items</td></tr>';
+    $('out').hidden = false;
+  } catch (e) { $('err').textContent = 'Error: ' + e.message; $('err').hidden = false; }
+  finally { $('send').disabled = false; $('send').textContent = 'Ask'; }
+}
+</script>
+</body>
+</html>

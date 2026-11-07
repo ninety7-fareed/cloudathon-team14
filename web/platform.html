@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CounterGuide - Shiftlead</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>CounterGuide · Shiftlead</h1>
+  <nav><a href="index.html">Guide chat</a> <a href="products.html">Product page</a> <a href="platform.html" class="active">Shiftlead (platform team)</a></nav>
+</header>
+<main>
+  <p class="hint">Shiftlead reads this application's health, the request log and the operations runbooks, then names the tier at fault and proposes one next action. <strong>It does not change anything.</strong> A person ships the fix through CloudFormation.</p>
+  <div class="examples">
+    <button data-q="Why is the product page erroring?">Why is the product page erroring?</button>
+    <button data-q="Is CounterGuide healthy right now? Check every tier.">Full health check</button>
+  </div>
+  <form id="f">
+    <textarea id="q" rows="2" maxlength="1000" placeholder="Describe the problem..."></textarea>
+    <button type="submit" id="send">Ask Shiftlead</button>
+  </form>
+  <section id="out" hidden>
+    <h2>Shiftlead's diagnosis</h2>
+    <div id="answer"></div>
+    <p class="note" id="note"></p>
+    <details><summary>Read-only checks Shiftlead ran (<span id="n">0</span>)</summary><pre id="trace"></pre></details>
+  </section>
+  <p id="err" class="err" hidden></p>
+  <details class="demo">
+    <summary>Demo controls (simulation, clearly labelled)</summary>
+    <p>Writes five <strong>SIMULATED</strong> failed product-page requests into the request log so Shiftlead has a fault to diagnose. No AWS resource is changed. Rows are marked <code>simulated=true</code>.</p>
+    <button id="sim">Record simulated product-page errors</button>
+    <button id="clr">Clear simulated rows</button>
+    <span id="simout"></span>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let sessionId = null;
+document.querySelectorAll('.examples button').forEach(b => b.onclick = () => { $('q').value = b.dataset.q; ask(); });
+$('f').onsubmit = (e) => { e.preventDefault(); ask(); };
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function ask(){
+  const q = $('q').value.trim(); if (!q) return;
+  $('send').disabled = true; $('send').textContent = 'Checking...'; $('err').hidden = true;
+  try {
+    const r = await fetch('/api/shiftlead', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q, sessionId})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    sessionId = d.sessionId;
+    $('answer').innerHTML = esc(d.answer).replace(/\n/g,'<br>');
+    $('note').textContent = d.note || '';
+    $('n').textContent = d.toolsRun.length;
+    $('trace').textContent = JSON.stringify(d.toolsRun, null, 2);
+    $('out').hidden = false;
+  } catch (e) { $('err').textContent = 'Error: ' + e.message; $('err').hidden = false; }
+  finally { $('send').disabled = false; $('send').textContent = 'Ask Shiftlead'; }
+}
+async function post(path){
+  const r = await fetch(path, {method:'POST'}); const d = await r.json();
+  $('simout').textContent = r.ok ? (d.note || 'Done.') : ('Error: ' + (d.error || r.status));
+}
+$('sim').onclick = () => post('/api/demo/simulate-product-page-errors');
+$('clr').onclick = () => post('/api/demo/clear-simulated');
+</script>
+</body>
+</html>
