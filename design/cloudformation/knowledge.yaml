@@ -1,0 +1,367 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CounterGuide knowledge stack. Two S3 document buckets, one S3 Vectors bucket
+  with two indexes, two Bedrock Knowledge Bases, and a read-only Shiftlead
+  Bedrock Agent. This stack does not create the web tier. A guide or runbook
+  re-ingest updates this stack's buckets and knowledge bases only.
+  Deploy only as WSParticipantRole/Participant in account 231075364174,
+  region us-east-1. Do not use the local AWS CLI default profile.
+
+Parameters:
+  DeployRegion:
+    Type: String
+    Default: us-east-1
+    AllowedValues: [us-east-1]
+    Description: Verified deploy region from the Cloudathon@UH 2026 workshop page on 7 Nov 2026.
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: >
+      Assumption. Embedding model for both knowledge bases. Not Nova Pro.
+      Confirm the model is enabled before deploy. Index dimension must match.
+  EmbeddingDimension:
+    Type: Number
+    Default: 1024
+    MinValue: 1
+    MaxValue: 4096
+    Description: Assumption. 1024 matches Titan Text Embeddings V2 defaults. Not a measured value.
+  FoundationModelId:
+    Type: String
+    Default: us.amazon.nova-pro-v1:0
+    Description: >
+      Assumption. Amazon Nova Pro via the US inference profile, for Shiftlead.
+      The workshop model-access section uses Nova Pro as the example.
+      Model access is not confirmed enabled in account 231075364174.
+
+Rules:
+  WorkshopTarget:
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: Deploy only in us-east-1. Verified from the workshop page on 7 Nov 2026.
+      - Assert: !Equals [!Ref "AWS::AccountId", "231075364174"]
+        AssertDescription: Deploy only into Workshop Studio account 231075364174 as WSParticipantRole/Participant.
+      - Assert: !Equals [!Ref DeployRegion, us-east-1]
+        AssertDescription: DeployRegion is locked to us-east-1.
+
+Resources:
+  GuidesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "counterguide-guides-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+
+  RunbooksBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "counterguide-runbooks-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Properties:
+      VectorBucketName: !Sub "counterguide-vectors-${AWS::AccountId}"
+
+  ProductIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+      IndexName: product-guides
+      DataType: float32
+      Dimension: !Ref EmbeddingDimension
+      DistanceMetric: cosine
+
+  RunbookIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+      IndexName: operations-runbooks
+      DataType: float32
+      Dimension: !Ref EmbeddingDimension
+      DistanceMetric: cosine
+
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: counterguide-knowledge-base
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: bedrock.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+      Policies:
+        - PolicyName: read-documents-and-write-vectors
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource:
+                  - !GetAtt GuidesBucket.Arn
+                  - !GetAtt RunbooksBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject]
+                Resource:
+                  - !Sub "${GuidesBucket.Arn}/*"
+                  - !Sub "${RunbooksBucket.Arn}/*"
+              - Effect: Allow
+                Action: [s3vectors:GetVectorBucket]
+                Resource: !GetAtt VectorBucket.VectorBucketArn
+              - Effect: Allow
+                Action:
+                  - s3vectors:GetIndex
+                  - s3vectors:QueryVectors
+                  - s3vectors:PutVectors
+                  - s3vectors:GetVectors
+                  - s3vectors:DeleteVectors
+                Resource:
+                  - !GetAtt ProductIndex.IndexArn
+                  - !GetAtt RunbookIndex.IndexArn
+              - Effect: Allow
+                Action: [bedrock:InvokeModel]
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+
+  ProductKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: counterguide-product-guides
+      Description: Product guides for battery safety, device care, hobby setup, and the return window.
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          IndexArn: !GetAtt ProductIndex.IndexArn
+          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+
+  RunbookKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: counterguide-operations-runbooks
+      Description: Operations runbooks for the CounterGuide load balancer, service, database, and knowledge-base sync.
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          IndexArn: !GetAtt RunbookIndex.IndexArn
+          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+
+  GuidesDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: product-guides
+      Description: S3 source for product guides. Re-ingest does not deploy the web tier.
+      KnowledgeBaseId: !Ref ProductKnowledgeBase
+      DataDeletionPolicy: DELETE
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt GuidesBucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 300
+            OverlapPercentage: 20
+
+  RunbooksDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: operations-runbooks
+      Description: S3 source for operations runbooks. Re-ingest does not deploy the web tier.
+      KnowledgeBaseId: !Ref RunbookKnowledgeBase
+      DataDeletionPolicy: DELETE
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt RunbooksBucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 300
+            OverlapPercentage: 20
+
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: counterguide-shiftlead
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: bedrock.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*"
+      Policies:
+        - PolicyName: read-runbooks-and-invoke-nova
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [bedrock:Retrieve]
+                Resource: !GetAtt RunbookKnowledgeBase.KnowledgeBaseArn
+              - Effect: Allow
+                Action: [bedrock:InvokeModel]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${FoundationModelId}"
+              - Effect: Deny
+                Action:
+                  - bedrock:Create*
+                  - bedrock:Delete*
+                  - bedrock:Update*
+                  - cloudformation:*
+                  - ec2:*
+                  - ecs:*
+                  - elasticloadbalancing:*
+                  - iam:*
+                  - rds:*
+                  - ssm:*
+                Resource: "*"
+
+  ShiftleadAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: counterguide-shiftlead
+      AgentResourceRoleArn: !GetAtt AgentRole.Arn
+      AutoPrepare: true
+      FoundationModel: !Ref FoundationModelId
+      IdleSessionTTLInSeconds: 600
+      Description: Read-only infrastructure agent for CounterGuide. No automatic remediation.
+      Instruction: >
+        You are Shiftlead for the CounterGuide application only.
+        Read this application's load balancer target health, ECS service status,
+        Aurora database status, knowledge-base sync status, CloudWatch alarms,
+        and the request log by calling the read-only tools.
+        Use the operations runbooks to name the tier at fault and one next action.
+        The next action is a proposal a person ships through CloudFormation.
+        Do not change infrastructure. Do not remediate automatically.
+        Do not ask for account-wide access. Do not invent a tier outside web, application, and data.
+        If the tools do not show a fault, say what you could not see.
+      KnowledgeBases:
+        - KnowledgeBaseId: !Ref RunbookKnowledgeBase
+          Description: Operations runbooks for this application.
+          KnowledgeBaseState: ENABLED
+      ActionGroups:
+        - ActionGroupName: read-health
+          Description: Read-only tools. The application tier runs them. No writes.
+          ActionGroupState: ENABLED
+          ActionGroupExecutor:
+            CustomControl: RETURN_CONTROL
+          FunctionSchema:
+            Functions:
+              - Name: read_load_balancer_target_health
+                Description: Read target health for this application's load balancer only.
+                RequireConfirmation: DISABLED
+              - Name: read_service_status
+                Description: Read ECS service status for CounterGuide only.
+                RequireConfirmation: DISABLED
+              - Name: read_database_status
+                Description: Read Aurora cluster status for CounterGuide only.
+                RequireConfirmation: DISABLED
+              - Name: read_knowledge_base_sync_status
+                Description: Read ingestion status for the two CounterGuide knowledge bases only.
+                RequireConfirmation: DISABLED
+              - Name: read_cloudwatch_alarms
+                Description: Read CloudWatch alarms whose names start with counterguide.
+                RequireConfirmation: DISABLED
+              - Name: read_request_log
+                Description: Read recent CounterGuide request-log rows. The application tier queries Aurora.
+                RequireConfirmation: DISABLED
+      SkipResourceInUseCheckOnDelete: true
+
+  ShiftleadAlias:
+    Type: AWS::Bedrock::AgentAlias
+    Properties:
+      AgentAliasName: live
+      AgentId: !GetAtt ShiftleadAgent.AgentId
+      Description: Alias the application tier invokes. Read-only.
+      RoutingConfiguration:
+        - AgentVersion: "1"
+
+Outputs:
+  ProductKnowledgeBaseId:
+    Value: !Ref ProductKnowledgeBase
+    Export: { Name: !Sub "${AWS::StackName}-ProductKnowledgeBaseId" }
+  ProductKnowledgeBaseArn:
+    Value: !GetAtt ProductKnowledgeBase.KnowledgeBaseArn
+    Export: { Name: !Sub "${AWS::StackName}-ProductKnowledgeBaseArn" }
+  RunbookKnowledgeBaseId:
+    Value: !Ref RunbookKnowledgeBase
+    Export: { Name: !Sub "${AWS::StackName}-RunbookKnowledgeBaseId" }
+  RunbookKnowledgeBaseArn:
+    Value: !GetAtt RunbookKnowledgeBase.KnowledgeBaseArn
+    Export: { Name: !Sub "${AWS::StackName}-RunbookKnowledgeBaseArn" }
+  GuidesDataSourceId:
+    Value: !GetAtt GuidesDataSource.DataSourceId
+    Export: { Name: !Sub "${AWS::StackName}-GuidesDataSourceId" }
+  RunbooksDataSourceId:
+    Value: !GetAtt RunbooksDataSource.DataSourceId
+    Export: { Name: !Sub "${AWS::StackName}-RunbooksDataSourceId" }
+  GuidesBucketName:
+    Value: !Ref GuidesBucket
+    Export: { Name: !Sub "${AWS::StackName}-GuidesBucketName" }
+  RunbooksBucketName:
+    Value: !Ref RunbooksBucket
+    Export: { Name: !Sub "${AWS::StackName}-RunbooksBucketName" }
+  ShiftleadAgentId:
+    Value: !GetAtt ShiftleadAgent.AgentId
+    Export: { Name: !Sub "${AWS::StackName}-ShiftleadAgentId" }
+  ShiftleadAgentArn:
+    Value: !GetAtt ShiftleadAgent.AgentArn
+    Export: { Name: !Sub "${AWS::StackName}-ShiftleadAgentArn" }
+  ShiftleadAgentAliasId:
+    Value: !GetAtt ShiftleadAlias.AgentAliasId
+    Export: { Name: !Sub "${AWS::StackName}-ShiftleadAgentAliasId" }
+  ShiftleadAgentAliasArn:
+    Value: !GetAtt ShiftleadAlias.AgentAliasArn
+    Export: { Name: !Sub "${AWS::StackName}-ShiftleadAgentAliasArn" }

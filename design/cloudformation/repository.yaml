@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CounterGuide container repository. Deploy this before the application stack
+  so an image can be pushed before ECS starts tasks. Deploy only as
+  WSParticipantRole/Participant in account 231075364174, region us-east-1.
+  Do not use the local AWS CLI default profile (account 375760496131).
+
+Parameters:
+  DeployRegion:
+    Type: String
+    Default: us-east-1
+    AllowedValues: [us-east-1]
+    Description: Verified deploy region from the Cloudathon@UH 2026 workshop page on 7 Nov 2026.
+  RepositoryName:
+    Type: String
+    Default: counterguide
+    AllowedPattern: "[a-z][a-z0-9./_-]{1,200}"
+
+Rules:
+  WorkshopTarget:
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: Deploy only in us-east-1. Verified from the workshop page on 7 Nov 2026.
+      - Assert: !Equals [!Ref "AWS::AccountId", "231075364174"]
+        AssertDescription: Deploy only into Workshop Studio account 231075364174 as WSParticipantRole/Participant.
+      - Assert: !Equals [!Ref DeployRegion, us-east-1]
+        AssertDescription: DeployRegion is locked to us-east-1.
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the last five images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+Outputs:
+  RepositoryName:
+    Value: !Ref Repository
+    Export: { Name: !Sub "${AWS::StackName}-RepositoryName" }
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+    Export: { Name: !Sub "${AWS::StackName}-RepositoryUri" }

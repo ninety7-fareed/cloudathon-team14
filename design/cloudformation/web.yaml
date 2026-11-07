@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CounterGuide web stack. Private S3 bucket for the static associate chat and
+  Shiftlead platform view, CloudFront, AWS WAF on the distribution, and an ACM
+  certificate in us-east-1 only when a domain and a hosted zone are both
+  supplied. This stack does not contain the knowledge bases. A guide or runbook
+  re-ingest does not update this stack. Deploy only as WSParticipantRole/Participant
+  in account 231075364174, region us-east-1. CloudFront and its certificate are
+  both in us-east-1, which is the deploy region. Do not use the local default profile.
+
+Parameters:
+  DeployRegion:
+    Type: String
+    Default: us-east-1
+    AllowedValues: [us-east-1]
+    Description: Verified deploy region from the Cloudathon@UH 2026 workshop page on 7 Nov 2026.
+  ApplicationStackName:
+    Type: String
+    Default: counterguide-application
+    Description: Stack that exports the load balancer DNS name. Default counterguide-application.
+  DomainName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional custom domain. Leave empty. Assumption: no custom domain is available,
+      so the CloudFront default hostname is the public name.
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route 53 hosted zone ID. Used only together with DomainName. Leave empty for the proof of concept.
+
+Conditions:
+  HasDomain: !And
+    - !Not [!Equals [!Ref DomainName, ""]]
+    - !Not [!Equals [!Ref HostedZoneId, ""]]
+
+Rules:
+  WorkshopTarget:
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: Deploy only in us-east-1. Verified from the workshop page on 7 Nov 2026. The CloudFront WAF and any ACM certificate must also be in us-east-1.
+      - Assert: !Equals [!Ref "AWS::AccountId", "231075364174"]
+        AssertDescription: Deploy only into Workshop Studio account 231075364174 as WSParticipantRole/Participant.
+      - Assert: !Equals [!Ref DeployRegion, us-east-1]
+        AssertDescription: DeployRegion is locked to us-east-1.
+
+Resources:
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "counterguide-web-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      VersioningConfiguration: { Status: Enabled }
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-web"
+        Description: CounterGuide static front end
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-web"
+      Scope: CLOUDFRONT
+      DefaultAction: { Allow: {} }
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: counterguide-web
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 0
+          OverrideAction: { None: {} }
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: counterguide-common
+            SampledRequestsEnabled: true
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasDomain
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: CounterGuide associate chat and Shiftlead platform view
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        IPV6Enabled: false
+        PriceClass: PriceClass_100
+        WebACLId: !GetAtt WebAcl.Arn
+        Aliases: !If [HasDomain, [!Ref DomainName], !Ref "AWS::NoValue"]
+        Origins:
+          - Id: web
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !Ref OriginAccessControl
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: app
+            DomainName: { "Fn::ImportValue": !Sub "${ApplicationStackName}-AlbDnsName" }
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginSSLProtocols: [TLSv1.2]
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: "{{resolve:secretsmanager:counterguide/origin-verify:SecretString}}"
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+        ViewerCertificate: !If
+          - HasDomain
+          - AcmCertificateArn: !Ref Certificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+Outputs:
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
+    Export: { Name: !Sub "${AWS::StackName}-DistributionDomainName" }
+  SiteUrl:
+    Description: CloudFront default hostname unless a domain and hosted zone were both supplied.
+    Value: !If
+      - HasDomain
+      - !Sub "https://${DomainName}"
+      - !Sub "https://${Distribution.DomainName}"
+  WebBucketName:
+    Value: !Ref WebBucket
+    Export: { Name: !Sub "${AWS::StackName}-WebBucketName" }
+  WebAclArn:
+    Value: !GetAtt WebAcl.Arn

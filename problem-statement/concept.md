@@ -38,3 +38,4 @@ The sample application is **CounterGuide**, defined in `sample-application.md`.
 - `situation.md` — timeline and team limits
 - `sample-application.md` — source of truth for CounterGuide, Guide chat, and Shiftlead
 - `pain-points.md` — problems the working solution must address
+- `../design/architecture.md` — locked CounterGuide architecture

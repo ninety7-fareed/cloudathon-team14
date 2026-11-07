@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CounterGuide network stack. One VPC in us-east-1, two Availability Zones,
+  public subnets for the load balancer, private subnets for Fargate, private
+  subnets for Aurora, two NAT gateways, and one S3 gateway endpoint.
+  Deploy only as WSParticipantRole/Participant in account 231075364174.
+  Do not deploy this into us-west-2. Do not place it in the vscodeserver VPC.
+  Do not use the local AWS CLI default profile (account 375760496131, user AdminFareed).
+
+Parameters:
+  DeployRegion:
+    Type: String
+    Default: us-east-1
+    AllowedValues: [us-east-1]
+    Description: >
+      Verified from the Cloudathon@UH 2026 workshop page on 7 Nov 2026.
+      The deploy region is us-east-1. us-west-2 is only the code server region.
+  VpcCidr:
+    Type: String
+    Default: 10.40.0.0/16
+  PublicSubnetACidr:
+    Type: String
+    Default: 10.40.0.0/24
+  PublicSubnetBCidr:
+    Type: String
+    Default: 10.40.1.0/24
+  AppSubnetACidr:
+    Type: String
+    Default: 10.40.32.0/24
+  AppSubnetBCidr:
+    Type: String
+    Default: 10.40.33.0/24
+  DataSubnetACidr:
+    Type: String
+    Default: 10.40.48.0/24
+  DataSubnetBCidr:
+    Type: String
+    Default: 10.40.49.0/24
+
+Rules:
+  WorkshopTarget:
+    Assertions:
+      - Assert: !Equals [!Ref "AWS::Region", us-east-1]
+        AssertDescription: Deploy only in us-east-1. Verified from the workshop page on 7 Nov 2026.
+      - Assert: !Equals [!Ref "AWS::AccountId", "231075364174"]
+        AssertDescription: Deploy only into Workshop Studio account 231075364174 as WSParticipantRole/Participant.
+      - Assert: !Equals [!Ref DeployRegion, us-east-1]
+        AssertDescription: DeployRegion is locked to us-east-1.
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-vpc" }
+        - { Key: Application, Value: CounterGuide }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-igw" }]
+
+  IgwAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-a" }]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-b" }]
+
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-a" }]
+
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-b" }]
+
+  DataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-data-a" }]
+
+  DataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-data-b" }]
+
+  NatEipA:
+    Type: AWS::EC2::EIP
+    DependsOn: IgwAttachment
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat-a-eip" }]
+
+  NatEipB:
+    Type: AWS::EC2::EIP
+    DependsOn: IgwAttachment
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat-b-eip" }]
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat-a" }]
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat-b" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-public" }]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRouteTable }
+
+  PublicSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRouteTable }
+
+  AppRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-app-a" }]
+
+  AppDefaultRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  AppSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref AppSubnetA, RouteTableId: !Ref AppRouteTableA }
+
+  AppRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-app-b" }]
+
+  AppDefaultRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+
+  AppSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref AppSubnetB, RouteTableId: !Ref AppRouteTableB }
+
+  DataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-data" }]
+
+  DataSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref DataSubnetA, RouteTableId: !Ref DataRouteTable }
+
+  DataSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref DataSubnetB, RouteTableId: !Ref DataRouteTable }
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref AppRouteTableA
+        - !Ref AppRouteTableB
+        - !Ref DataRouteTable
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub "${AWS::StackName}-VpcId" }
+  VpcCidr:
+    Value: !Ref VpcCidr
+    Export: { Name: !Sub "${AWS::StackName}-VpcCidr" }
+  PublicSubnets:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-PublicSubnets" }
+  AppSubnets:
+    Value: !Join [",", [!Ref AppSubnetA, !Ref AppSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-AppSubnets" }
+  DataSubnets:
+    Value: !Join [",", [!Ref DataSubnetA, !Ref DataSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-DataSubnets" }
