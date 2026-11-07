@@ -20,7 +20,18 @@
 <main class="page">
   <p class="role">Platform team</p>
   <h1>Shiftlead</h1>
-  <p class="lede">Ask why the product page is erroring. Shiftlead names the tier at fault and the next action. The page does not apply the change. A person ships it with CloudFormation.</p>
+  <p class="lede">Shiftlead shows whether the main resources are healthy, and names the tier at fault when the product page is erroring. The page does not apply the change. A person ships it with CloudFormation.</p>
+
+  <section class="board" id="board" aria-labelledby="board-title">
+    <div class="board-head">
+      <div>
+        <h2 id="board-title">Resources</h2>
+        <p class="board-summary" id="board-summary">Checking the main resources.</p>
+      </div>
+      <button class="btn btn-secondary" type="button" id="board-refresh">Refresh</button>
+    </div>
+    <div class="board-grid" id="board-grid" aria-live="polite"></div>
+  </section>
 
   <section class="setup">
     <h2>Product-page example</h2>

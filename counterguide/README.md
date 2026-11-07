@@ -1,5 +1,7 @@
 # CounterGuide: application code, web pages, demo content
 
+**Live site:** [https://d6v32wosjtbse.cloudfront.net](https://d6v32wosjtbse.cloudfront.net) (Guide chat, home page). Shiftlead: [https://d6v32wosjtbse.cloudfront.net/platform.html](https://d6v32wosjtbse.cloudfront.net/platform.html).
+
 Deploy and verify steps below.
 
 Everything is deployed from the CloudFormation templates in `design/cloudformation/`. No console-built resources.

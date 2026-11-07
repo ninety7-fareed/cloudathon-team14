@@ -98,6 +98,22 @@ function previewChat(body) {
   };
 }
 
+function previewStatus() {
+  return {
+    overall: 'healthy',
+    summary: 'All main resources are healthy.',
+    checkedAt: new Date().toISOString(),
+    resources: [
+      { id: 'application', name: 'Application service', tier: 'Application', status: 'healthy', detail: '2 of 2 tasks running.' },
+      { id: 'load-balancer', name: 'Load balancer', tier: 'Application', status: 'healthy', detail: '2 targets healthy.' },
+      { id: 'database', name: 'Aurora database', tier: 'Data', status: 'healthy', detail: 'Available. Writer and reader are up.' },
+      { id: 'product-guides', name: 'Product guides', tier: 'Data', status: 'healthy', detail: 'Active. Last ingestion complete (4 documents).' },
+      { id: 'runbooks', name: 'Operations runbooks', tier: 'Data', status: 'healthy', detail: 'Active. Last ingestion complete (4 documents).' },
+      { id: 'alarms', name: 'CloudWatch alarms', tier: 'Application', status: 'healthy', detail: 'No alarms are firing.' },
+    ],
+  };
+}
+
 function previewShiftlead() {
   return {
     answer: 'Tier at fault: data.\nThe last 5 product-page requests failed with a database connection timeout on port 5432. Load balancer targets and the application service are healthy.\nNext action: check the Aurora writer. If capacity is exhausted, raise MaxAcu on the counterguide-application stack. A person ships that change with CloudFormation.',
@@ -115,6 +131,7 @@ function previewShiftlead() {
 function previewData(path, body) {
   const key = path.split('?')[0];
   if (key === '/api/chat') return previewChat(body);
+  if (key === '/api/shiftlead/status') return previewStatus();
   if (key === '/api/shiftlead') return previewShiftlead();
   if (key === '/api/products') return { products: PREVIEW_PRODUCTS };
   if (key === '/api/demo/simulate-product-page-errors') {
@@ -451,11 +468,68 @@ function initGuide() {
   });
 }
 
+const STATUS_CLASS = { healthy: 'healthy', unhealthy: 'unhealthy', unavailable: 'unavailable' };
+const STATUS_LABEL = { healthy: 'Healthy', unhealthy: 'Unhealthy', unavailable: 'Unavailable' };
+
+function statusKind(status) {
+  return STATUS_CLASS[status] || 'unavailable';
+}
+
+function renderBoard(data) {
+  const summary = $('#board-summary');
+  const kind = statusKind(data && data.overall);
+  summary.textContent = (data && data.summary) || 'No status was returned.';
+  summary.className = `board-summary is-${kind}`;
+  const resources = data && Array.isArray(data.resources) ? data.resources : [];
+  $('#board-grid').innerHTML = resources.length
+    ? resources.map((item) => {
+      const kindName = statusKind(item.status);
+      return `<article class="resource ${kindName}">
+        <p class="resource-tier">${esc(item.tier)}</p>
+        <h3>${esc(item.name)}</h3>
+        <p class="pill ${kindName}">${esc(STATUS_LABEL[kindName])}</p>
+        <p class="resource-detail">${esc(item.detail)}</p>
+      </article>`;
+    }).join('')
+    : '<p class="empty">No resources were returned.</p>';
+}
+
 function initShiftlead() {
   const question = $('#q');
   const ask = $('#ask');
   let sessionId = null;
   let ticket = 0;
+  let boardTicket = 0;
+
+  async function loadBoard() {
+    const my = ++boardTicket;
+    const refresh = $('#board-refresh');
+    refresh.disabled = true;
+    refresh.textContent = 'Refreshing…';
+    $('#board-summary').className = 'board-summary';
+    $('#board-summary').textContent = 'Checking the main resources.';
+    $('#board-grid').innerHTML = Array.from({ length: 6 }, () => (
+      '<div class="resource"><div class="skeleton" style="width:42%"></div><div class="skeleton" style="width:76%"></div><div class="skeleton" style="width:55%"></div></div>'
+    )).join('');
+    try {
+      const { data } = await api('/api/shiftlead/status');
+      if (my !== boardTicket) return;
+      renderBoard(data);
+    } catch (e) {
+      if (my !== boardTicket) return;
+      $('#board-summary').className = 'board-summary is-unhealthy';
+      $('#board-summary').textContent = e.message || 'The resource status could not be read.';
+      $('#board-grid').innerHTML = '';
+    } finally {
+      if (my === boardTicket) {
+        refresh.disabled = false;
+        refresh.textContent = 'Refresh';
+      }
+    }
+  }
+
+  $('#board-refresh').addEventListener('click', loadBoard);
+  loadBoard();
 
   async function run() {
     const text = question.value.trim();

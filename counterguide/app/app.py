@@ -408,6 +408,205 @@ def run_tool(name):
         return {"error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
+# Main resources on the Shiftlead dashboard. These are the same read-only
+# checks as diagnosis. The status route does not write the request log, so a
+# refresh cannot push simulated product-page errors out of the last 20 rows.
+STATUS_TOOLS = (
+    "read_service_status",
+    "read_load_balancer_target_health",
+    "read_database_status",
+    "read_knowledge_base_sync_status",
+    "read_cloudwatch_alarms",
+)
+
+
+def _resource(resource_id, name, tier, status, detail):
+    return {"id": resource_id, "name": name, "tier": tier, "status": status, "detail": detail}
+
+
+def _reading_error(result):
+    """Map a failed tool result to a dashboard status. None means the read succeeded."""
+    if not isinstance(result, dict):
+        return "unavailable", "No reading was returned."
+    err = str(result.get("error") or "").strip()
+    if not err:
+        return None
+    if "AccessDenied" in err or "not authorized" in err:
+        return "unavailable", "The task role cannot read this resource."
+    return "unhealthy", err[:160]
+
+
+def _service_resource(result):
+    problem = _reading_error(result)
+    if problem:
+        return _resource("application", "Application service", "Application", *problem)
+    services = result.get("services") or []
+    if not services:
+        return _resource("application", "Application service", "Application", "unavailable", "No service was returned.")
+    notes = []
+    healthy = True
+    for svc in services:
+        running = int(svc.get("running") or 0)
+        desired = int(svc.get("desired") or 0)
+        # Steady state for this application is two tasks.
+        if svc.get("status") != "ACTIVE" or running < desired or running < 2:
+            healthy = False
+        notes.append(f"{running} of {desired} tasks running.")
+    detail = " ".join(notes) if notes else "No tasks reported."
+    return _resource("application", "Application service", "Application",
+                     "healthy" if healthy else "unhealthy", detail)
+
+
+def _load_balancer_resource(result):
+    problem = _reading_error(result)
+    if problem:
+        return _resource("load-balancer", "Load balancer", "Application", *problem)
+    targets = [t for group in (result.get("targetGroups") or []) for t in (group.get("targets") or [])]
+    if not targets:
+        return _resource("load-balancer", "Load balancer", "Application", "unavailable", "No targets are registered.")
+    bad = [t for t in targets if t.get("state") != "healthy"]
+    if bad:
+        states = ", ".join(sorted({t.get("state") or "unknown" for t in bad}))
+        detail = f"{len(bad)} of {len(targets)} targets are not healthy ({states})."
+        return _resource("load-balancer", "Load balancer", "Application", "unhealthy", detail)
+    noun = "target" if len(targets) == 1 else "targets"
+    return _resource("load-balancer", "Load balancer", "Application", "healthy", f"{len(targets)} {noun} healthy.")
+
+
+def _database_resource(result):
+    problem = _reading_error(result)
+    if problem:
+        return _resource("database", "Aurora database", "Data", *problem)
+    members = result.get("members") or []
+    reachable = str(result.get("reachableFromApplication") or "")
+    cluster_status = result.get("status")
+    member_down = [m for m in members if m.get("error") or m.get("status") != "available"]
+    if cluster_status != "available" or reachable != "yes" or member_down:
+        notes = []
+        if cluster_status != "available":
+            notes.append(f"Cluster status is {cluster_status or 'unknown'}.")
+        if reachable != "yes":
+            notes.append("The application cannot reach the database.")
+        if member_down:
+            notes.append("A cluster member is not available.")
+        return _resource("database", "Aurora database", "Data", "unhealthy", " ".join(notes))
+    writers = [m for m in members if m.get("writer")]
+    readers = [m for m in members if not m.get("writer")]
+    if writers and readers:
+        detail = "Available. Writer and reader are up."
+    elif writers:
+        detail = "Available. The writer is up."
+    else:
+        detail = "Available."
+    return _resource("database", "Aurora database", "Data", "healthy", detail)
+
+
+def _one_knowledge_base(resource_id, label, item):
+    status = str(item.get("status") or "")
+    if status.startswith("unreadable"):
+        if "AccessDenied" in status or "not authorized" in status:
+            detail = "The task role cannot read this resource."
+        else:
+            detail = status[:160]
+        return _resource(resource_id, label, "Data", "unavailable", detail)
+    if status != "ACTIVE":
+        return _resource(resource_id, label, "Data", "unhealthy", f"Status is {status or 'unknown'}.")
+    ingestion = item.get("lastIngestion")
+    if isinstance(ingestion, str):
+        if ingestion.startswith("none"):
+            return _resource(resource_id, label, "Data", "unhealthy", "Active, but documents were never ingested.")
+        if ingestion.startswith("unreadable"):
+            return _resource(resource_id, label, "Data", "unavailable", "Active, but the last ingestion could not be read.")
+        return _resource(resource_id, label, "Data", "healthy", "Active.")
+    if isinstance(ingestion, dict):
+        job = ingestion.get("status")
+        failed = int((ingestion.get("statistics") or {}).get("numberOfDocumentsFailed") or 0)
+        scanned = (ingestion.get("statistics") or {}).get("numberOfDocumentsScanned")
+        if job in ("STARTING", "IN_PROGRESS"):
+            return _resource(resource_id, label, "Data", "healthy", "Active. An ingestion is in progress.")
+        if job != "COMPLETE" or failed:
+            if failed:
+                detail = f"Last ingestion complete, with {failed} documents failed."
+            else:
+                detail = f"Last ingestion is {job or 'unknown'}."
+            return _resource(resource_id, label, "Data", "unhealthy", detail)
+        if scanned is None:
+            detail = "Active. Last ingestion complete."
+        else:
+            detail = f"Active. Last ingestion complete ({scanned} documents)."
+        return _resource(resource_id, label, "Data", "healthy", detail)
+    return _resource(resource_id, label, "Data", "healthy", "Active.")
+
+
+def _knowledge_base_resources(result):
+    expected = (
+        ("product-guides", "product-guides", "Product guides"),
+        ("operations-runbooks", "runbooks", "Operations runbooks"),
+    )
+    problem = _reading_error(result)
+    if problem:
+        return [_resource(resource_id, label, "Data", problem[0], problem[1]) for _, resource_id, label in expected]
+    by_name = {item.get("knowledgeBase"): item for item in (result.get("knowledgeBases") or [])}
+    resources = []
+    for key, resource_id, label in expected:
+        item = by_name.get(key)
+        if item is None:
+            resources.append(_resource(resource_id, label, "Data", "unavailable", "No reading was returned."))
+        else:
+            resources.append(_one_knowledge_base(resource_id, label, item))
+    return resources
+
+
+def _alarm_resource(result):
+    problem = _reading_error(result)
+    if problem:
+        return _resource("alarms", "CloudWatch alarms", "Application", *problem)
+    alarms = result.get("alarms") or []
+    firing = [a for a in alarms if a.get("state") == "ALARM"]
+    if firing:
+        noun = "alarm is" if len(firing) == 1 else "alarms are"
+        return _resource("alarms", "CloudWatch alarms", "Application", "unhealthy", f"{len(firing)} {noun} firing.")
+    if alarms:
+        return _resource("alarms", "CloudWatch alarms", "Application", "healthy", f"{len(alarms)} alarms, none firing.")
+    return _resource("alarms", "CloudWatch alarms", "Application", "healthy", "No alarms are firing.")
+
+
+def summarize_resources(readings):
+    """Turn tool readings into the dashboard. readings maps tool name to result."""
+    readings = readings or {}
+    resources = [
+        _service_resource(readings.get("read_service_status")),
+        _load_balancer_resource(readings.get("read_load_balancer_target_health")),
+        _database_resource(readings.get("read_database_status")),
+        *_knowledge_base_resources(readings.get("read_knowledge_base_sync_status")),
+        _alarm_resource(readings.get("read_cloudwatch_alarms")),
+    ]
+    healthy = sum(1 for item in resources if item["status"] == "healthy")
+    unhealthy = sum(1 for item in resources if item["status"] == "unhealthy")
+    unavailable = sum(1 for item in resources if item["status"] == "unavailable")
+    total = len(resources)
+    if healthy == total:
+        overall = "healthy"
+        summary = "All main resources are healthy."
+    elif unhealthy:
+        overall = "unhealthy"
+        summary = f"{unhealthy} of {total} main resources are unhealthy."
+    else:
+        overall = "unavailable"
+        summary = f"{healthy} of {total} main resources are healthy. {unavailable} could not be read."
+    return {
+        "overall": overall,
+        "summary": summary,
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "resources": resources,
+    }
+
+
+def resource_board():
+    readings = {name: run_tool(name) for name in STATUS_TOOLS}
+    return summarize_resources(readings)
+
+
 def local_shiftlead():
     """Read-only diagnosis when no Bedrock agent is configured. Proposes only."""
     trace = [{"tool": name, "result": run_tool(name)} for name in TOOLS]
@@ -490,6 +689,12 @@ def shiftlead():
     write_request_log("/api/shiftlead", 200, "application", _elapsed_ms())
     return jsonify(answer=answer.strip() or "Shiftlead returned no text.", toolsRun=_json_safe(trace),
                    sessionId=session_id, note="Proposal only. A person ships any change through CloudFormation.")
+
+
+@app.get("/api/shiftlead/status")
+def shiftlead_status():
+    """Read-only health of the main resources. Does not record a request-log row."""
+    return jsonify(_json_safe(resource_board()))
 
 
 # --------------------------------------------------------------------------- #
