@@ -1,0 +1,301 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloudathon PoC - APPLICATION stack, 3 tiers. Public ALB -> web Auto Scaling
+  tier -> internal ALB -> app Auto Scaling tier -> RDS MySQL, with a security
+  group chain between every hop. Requires the network stack (default name:
+  poc-network) with WebSubnets, AppSubnets and DataSubnets exports.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: poc-network
+    Description: Name of the deployed network stack
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: 8-41 letters/numbers only (keeps the user-data script simple)
+    Description: Throwaway DB master password (letters/numbers only)
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  MultiAZDatabase:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: true = standby DB in a 2nd AZ (production); false = cheaper PoC
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  # ---------- Security group chain: internet -> ALB -> web -> internal ALB -> app -> DB ----------
+  # Each rule references the previous tier's security group, not an IP range,
+  # so it keeps working when Auto Scaling replaces instances (new IPs).
+  AlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP from the internet (public website entry point)
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-alb-sg" }]
+  WebSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP from the public ALB only
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, SourceSecurityGroupId: !Ref AlbSg }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-web-sg" }]
+  InternalAlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Port 8080 from the web tier only
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref WebSg }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-ialb-sg" }]
+  AppSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Port 8080 from the internal ALB only
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref InternalAlbSg }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-sg" }]
+  DbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL from the app tier only
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 3306, ToPort: 3306, SourceSecurityGroupId: !Ref AppSg }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-db-sg" }]
+
+  # ---------- Data tier ----------
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: PoC data tier
+      SubnetIds: !Split [",", { "Fn::ImportValue": !Sub "${NetworkStackName}-DataSubnets" }]
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete          # practice stack: no final snapshot on delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: mysql
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true        # encryption at rest (KMS, AWS-managed key)
+      MultiAZ: !Ref MultiAZDatabase
+      DBName: pocdb
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSg]
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      DeleteAutomatedBackups: true
+      DeletionProtection: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-db" }]
+
+  # ---------- App tier: internal ALB (port 8080) -> app servers ----------
+  # Only the app tier holds DB credentials; web servers never talk to the DB.
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      Protocol: HTTP
+      Port: 8080
+      TargetType: instance
+      HealthCheckPath: /api/health.html
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+
+  InternalLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internal              # private IPs only; unreachable from the internet
+      Subnets: !Split [",", { "Fn::ImportValue": !Sub "${NetworkStackName}-AppSubnets" }]
+      SecurityGroups: [!Ref InternalAlbSg]
+
+  InternalListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref InternalLoadBalancer
+      Protocol: HTTP
+      Port: 8080
+      DefaultActions:
+        - { Type: forward, TargetGroupArn: !Ref AppTargetGroup }
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds: [!Ref AppSg]
+        MetadataOptions: { HttpTokens: required }   # IMDSv2 only
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app" }]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            dnf install -y httpd php php-mysqlnd
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            echo "$ID ($AZ)" > /var/www/instance.txt
+            sed -i 's/^Listen 80$/Listen 8080/' /etc/httpd/conf/httpd.conf
+            mkdir -p /var/www/html/api
+            echo ok > /var/www/html/api/health.html
+            cat > /var/www/html/api/visit.php <<'PHP'
+            <?php
+            $me = trim(file_get_contents('/var/www/instance.txt'));
+            $db = new mysqli('${Database.Endpoint.Address}', 'admin', '${DBPassword}', 'pocdb');
+            if ($db->connect_error) { http_response_code(503); die("App tier OK on $me, but DB connection failed."); }
+            $db->query("CREATE TABLE IF NOT EXISTS visits (id INT AUTO_INCREMENT PRIMARY KEY, served_by VARCHAR(80), ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+              $db->query("INSERT INTO visits (served_by) VALUES ('" . $db->real_escape_string($me) . "')");
+            }
+            $n = $db->query("SELECT COUNT(*) FROM visits")->fetch_row()[0];
+            echo "<p>App tier: $me</p><p>Visits stored in RDS (data tier): $n</p>";
+            PHP
+            systemctl enable --now php-fpm httpd
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Split [",", { "Fn::ImportValue": !Sub "${NetworkStackName}-AppSubnets" }]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: "2"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+      TargetGroupARNs: [!Ref AppTargetGroup]
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+
+  AppCpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ASGAverageCPUUtilization }
+        TargetValue: 50
+
+  # ---------- Web tier: public ALB -> web servers ----------
+  # Web servers serve the page and forward /api/ calls to the internal ALB.
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: { "Fn::ImportValue": !Sub "${NetworkStackName}-VpcId" }
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckPath: /health.html
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Split [",", { "Fn::ImportValue": !Sub "${NetworkStackName}-PublicSubnets" }]
+      SecurityGroups: [!Ref AlbSg]
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - { Type: forward, TargetGroupArn: !Ref WebTargetGroup }
+
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds: [!Ref WebSg]
+        MetadataOptions: { HttpTokens: required }   # IMDSv2 only
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-web" }]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            dnf install -y httpd
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            echo ok > /var/www/html/health.html
+            # Reverse proxy: /api/ -> internal ALB. disablereuse makes Apache look up the ALB's (changing) IPs again.
+            cat > /etc/httpd/conf.d/api-proxy.conf <<'CONF'
+            ProxyPass        /api/ http://${InternalLoadBalancer.DNSName}:8080/api/ disablereuse=On
+            ProxyPassReverse /api/ http://${InternalLoadBalancer.DNSName}:8080/api/
+            CONF
+            cat > /var/www/html/index.html <<HTML
+            <h1>Cloudathon PoC: 3-tier (CloudFormation)</h1>
+            <p>Web tier: $ID ($AZ)</p>
+            <div id="app">Calling the app tier...</div>
+            <script>
+            fetch('/api/visit.php', { method: 'POST' })
+              .then(r => r.text())
+              .then(t => { document.getElementById('app').innerHTML = t; })
+              .catch(() => { document.getElementById('app').textContent = 'App tier unreachable'; });
+            </script>
+            HTML
+            systemctl enable --now httpd
+
+  WebAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Split [",", { "Fn::ImportValue": !Sub "${NetworkStackName}-WebSubnets" }]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.LatestVersionNumber
+      MinSize: "2"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+      TargetGroupARNs: [!Ref WebTargetGroup]
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+
+  WebCpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WebAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ASGAverageCPUUtilization }
+        TargetValue: 50
+
+Outputs:
+  WebsiteUrl:
+    Description: Open this in a browser (http, not https)
+    Value: !Sub "http://${LoadBalancer.DNSName}"
+  InternalAppEndpoint:
+    Description: Internal ALB (reachable only from the web tier)
+    Value: !Sub "http://${InternalLoadBalancer.DNSName}:8080"
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address

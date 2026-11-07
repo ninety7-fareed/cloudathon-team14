@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloudathon PoC - NETWORK stack. VPC across 2 AZs with public, private web,
+  private app, and private data subnets; 1 NAT gateway; S3 gateway endpoint.
+  Matches the CIS 3367 Team 1 diagram CIDR plan.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  PublicSubnetACidr:  { Type: String, Default: 10.20.0.0/24 }
+  PublicSubnetBCidr:  { Type: String, Default: 10.20.1.0/24 }
+  WebSubnetACidr:     { Type: String, Default: 10.20.16.0/24 }
+  WebSubnetBCidr:     { Type: String, Default: 10.20.17.0/24 }
+  AppSubnetACidr:     { Type: String, Default: 10.20.32.0/24 }
+  AppSubnetBCidr:     { Type: String, Default: 10.20.33.0/24 }
+  DataSubnetACidr:    { Type: String, Default: 10.20.48.0/24 }
+  DataSubnetBCidr:    { Type: String, Default: 10.20.49.0/24 }
+
+Resources:
+  # ---------- VPC + Internet Gateway ----------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-igw" }]
+
+  IgwAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # ---------- Subnets (AZ 0 = "A", AZ 1 = "B" of whatever region you deploy in) ----------
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-a" }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-b" }]
+  WebSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref WebSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-web-a" }]
+  WebSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref WebSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-web-b" }]
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-a" }]
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-app-b" }]
+  DataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-data-a" }]
+  DataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-data-b" }]
+
+  # ---------- NAT gateway (1 for cost; production = 1 per AZ) ----------
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: IgwAttachment
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat-eip" }]
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-nat" }]
+
+  # ---------- Route tables ----------
+  # Public: 0.0.0.0/0 -> Internet Gateway (two-way internet)
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-public" }]
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRouteTable }
+  PublicSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRouteTable }
+
+  # Web: 0.0.0.0/0 -> NAT (outbound only, e.g. installing packages)
+  WebRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-web" }]
+  WebDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref WebRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  WebSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref WebSubnetA, RouteTableId: !Ref WebRouteTable }
+  WebSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref WebSubnetB, RouteTableId: !Ref WebRouteTable }
+
+  # App: 0.0.0.0/0 -> NAT (outbound only; app servers install packages at boot)
+  AppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-app" }]
+  AppDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  AppSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref AppSubnetA, RouteTableId: !Ref AppRouteTable }
+  AppSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref AppSubnetB, RouteTableId: !Ref AppRouteTable }
+
+  # Data: NO internet route at all (stricter than the hand-built version)
+  DataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-rtb-data" }]
+  DataSubnetARta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref DataSubnetA, RouteTableId: !Ref DataRouteTable }
+  DataSubnetBRta:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref DataSubnetB, RouteTableId: !Ref DataRouteTable }
+
+  # ---------- S3 gateway endpoint (free; S3 traffic stays on AWS network) ----------
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref WebRouteTable, !Ref AppRouteTable, !Ref DataRouteTable]
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub "${AWS::StackName}-VpcId" }
+  PublicSubnets:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-PublicSubnets" }
+  WebSubnets:
+    Value: !Join [",", [!Ref WebSubnetA, !Ref WebSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-WebSubnets" }
+  AppSubnets:
+    Value: !Join [",", [!Ref AppSubnetA, !Ref AppSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-AppSubnets" }
+  DataSubnets:
+    Value: !Join [",", [!Ref DataSubnetA, !Ref DataSubnetB]]
+    Export: { Name: !Sub "${AWS::StackName}-DataSubnets" }
