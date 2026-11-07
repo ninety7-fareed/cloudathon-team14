@@ -10,12 +10,13 @@ Show that a small team can use automation to speed up both the migration and the
 
 ## Sample application
 
-Use a simple sample application.
+The sample application is **CounterGuide**, defined in `sample-application.md`.
 
-- It must be sufficient to demonstrate a working solution.
-- It must be able to stand in for the pain points in `pain-points.md`.
+- Use that file as the source of truth for the application name, the tiers, Guide chat, Shiftlead, the demo, and the assumptions.
+- CounterGuide is one three-tier application: web, application, and data.
+- The data tier holds the catalog and the request log in a relational database. It also holds two Amazon Bedrock Knowledge Bases. One stores product guides. The other stores operations runbooks.
+- Guide chat and Shiftlead are in scope. Both live inside CounterGuide. Do not make either a fourth tier or a second application.
 - Do not recreate AnyCompany's full set of retail systems.
-- This folder does not name the sample application. If none is supplied elsewhere in the repository, choose a simple multi-tier sample, document why it is a fair stand-in for one business-critical application, and list every assumption you added.
 
 ## In scope
 
@@ -35,4 +36,5 @@ Use a simple sample application.
 - `core-requirements.md` — required properties of the architecture
 - `deliverables.md` — artifacts to produce
 - `situation.md` — timeline and team limits
+- `sample-application.md` — source of truth for CounterGuide, Guide chat, and Shiftlead
 - `pain-points.md` — problems the working solution must address
