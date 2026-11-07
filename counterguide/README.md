@@ -1,17 +1,19 @@
-# Deploy and verify CounterGuide
+# CounterGuide: application code, web pages, demo content
+
+Deploy and verify steps below.
 
 Everything is deployed from the CloudFormation templates in `design/cloudformation/`. No console-built resources.
-Run these in **AWS CloudShell in us-east-1** (signed in through Workshop Studio), or in the team code server with the workshop credentials. Region must be **us-east-1**.
+Run every command from the repository root. Run these in **AWS CloudShell in us-east-1** (signed in through Workshop Studio), or in the team code server with the workshop credentials. Region must be **us-east-1**.
 
 ## What's in this repo
 
 | Folder | What it is |
 |---|---|
 | `design/cloudformation/` | The five stacks (Fareed) |
-| `app/` | Application tier container: Flask API on port 8080 (`/health`, `/api/chat`, `/api/products`, `/api/shiftlead`) |
-| `web/` | Static pages for S3 + CloudFront: `index.html` (Guide chat), `products.html` (product page), `platform.html` (Shiftlead) |
-| `content/guides/` | Product guides for the product knowledge base (demo documents) |
-| `content/runbooks/` | Operations runbooks for the Shiftlead knowledge base (demo documents) |
+| `counterguide/app/` | Application tier container: Flask API on port 8080 (`/health`, `/api/chat`, `/api/products`, `/api/shiftlead`) |
+| `counterguide/web/` | Static pages for S3 + CloudFront: `index.html` (Guide chat), `products.html` (product page), `platform.html` (Shiftlead) |
+| `counterguide/content/guides/` | Product guides for the product knowledge base (demo documents) |
+| `counterguide/content/runbooks/` | Operations runbooks for the Shiftlead knowledge base (demo documents) |
 
 ## 0. Setup (about 1 min)
 
@@ -40,8 +42,8 @@ wait
 ## 2. Upload demo documents and ingest (about 2-3 min)
 
 ```bash
-aws s3 sync content/guides   s3://counterguide-guides-$ACCT/
-aws s3 sync content/runbooks s3://counterguide-runbooks-$ACCT/
+aws s3 sync counterguide/content/guides   s3://counterguide-guides-$ACCT/
+aws s3 sync counterguide/content/runbooks s3://counterguide-runbooks-$ACCT/
 aws bedrock-agent start-ingestion-job --knowledge-base-id $(out counterguide-knowledge ProductKnowledgeBaseId) --data-source-id $(out counterguide-knowledge GuidesDataSourceId)
 aws bedrock-agent start-ingestion-job --knowledge-base-id $(out counterguide-knowledge RunbookKnowledgeBaseId) --data-source-id $(out counterguide-knowledge RunbooksDataSourceId)
 ```
@@ -55,7 +57,7 @@ Needs Docker (`docker version`). CloudShell or the code server.
 ```bash
 REPO=$(out counterguide-repository RepositoryUri)
 aws ecr get-login-password | docker login --username AWS --password-stdin ${REPO%%/*}
-docker build --platform linux/amd64 -t $REPO:latest app/
+docker build --platform linux/amd64 -t $REPO:latest counterguide/app/
 docker push $REPO:latest
 ```
 
@@ -72,7 +74,7 @@ The image must be pushed first, or the ECS service cannot start.
 
 ```bash
 aws cloudformation deploy --stack-name counterguide-web --template-file $CF/web.yaml
-aws s3 sync web s3://counterguide-web-$ACCT/
+aws s3 sync counterguide/web s3://counterguide-web-$ACCT/
 echo "Site: $(out counterguide-web SiteUrl)"
 ```
 
@@ -95,7 +97,7 @@ Take a screenshot of each step as a backup.
 
 ## Updating one tier (minimal downtime)
 
-- Front end: `aws s3 sync web s3://counterguide-web-$ACCT/` (no other tier changes).
+- Front end: `aws s3 sync counterguide/web s3://counterguide-web-$ACCT/` (no other tier changes).
 - Guides or runbooks: `aws s3 sync` + `start-ingestion-job` for that knowledge base only.
 - Application: build and push a new tag, then redeploy step 4 with `ImageTag=<tag>`. ECS rolls tasks with 100% minimum healthy and rolls back on failure.
 
